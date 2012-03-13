@@ -14,7 +14,7 @@ Version 0.01
 
 =cut
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 
 =head1 SYNOPSIS
@@ -29,19 +29,20 @@ log-rotate mechanism.
 
 Example :
 
-    use File::RoundRobin;
+	use File::RoundRobin;
 
-    my $rrfile = File::RoundRobin->new(
+	my $rrfile = File::RoundRobin->new(
                                     path => '/tmp/sample.txt',
                                     size => '100M',
-                                    mode => 'new'
+                                    mode => 'new',
+									autoflush => 1,
                        			  );
 
 	$rrfile->print("foo bar");
 	
-    or
+	or
     
-    my $rrfile = File::RoundRobin->new(path => '/tmp/sample.txt', mode => 'read');
+	my $rrfile = File::RoundRobin->new(path => '/tmp/sample.txt', mode => 'read');
 
 	while (my $line = $rrfile->readline() ) {
 		print $line;
@@ -52,12 +53,14 @@ Example :
 When you write into the Round-Robin file, if it filled the maximum allowed space it 
 will write over the old data, while always preserving the most recent data.
 
-=head2 TIE INTERFACE
+=head1 TIE INTERFACE
 
 This module implements the TIEHANDLE interface and the objects an be used as normal 
 file handles.
 
-=head3 Write example:
+=over 4
+
+=item 1. Write example :
 
 	local *FH;
 	tie *FH, 'File::RoundRobin', path => 'test.txt',size => '10M';
@@ -70,7 +73,7 @@ file handles.
 	...
 	close($fh);
 	
-=head3 Read example :
+=item 2. Read example :
 
 	local *FH;
 	tie *FH, 'File::RoundRobin', path => 'test.txt',mode => 'read';
@@ -82,6 +85,8 @@ file handles.
 	}
 	
 	close($fh);
+	
+=back
 	
 =head1 UTILITIES
 
@@ -104,7 +109,7 @@ Returns a new File::RoundRobin object.
 
 Files can be opened in three ways: I<new file>, I<read>, I<append>
 
-=head3 New file mode
+=head3 write
 
 In I<new file> mode any existing data will be lost and the file will be overwritten
 Arguments :
@@ -124,7 +129,7 @@ Example :
                                     size => '100M',
                        			  );
 
-=head3 Read mode
+=head3 read
 
 Arguments :
 
@@ -140,7 +145,7 @@ Example :
 
 	my $rrfile = File::RoundRobin->new(path => '/tmp/sample.txt', mode => 'read');
 
-=head3 Append mode
+=head3 append
 
 In I<append> mode all existing data will preserved and we can continue writing the file from where we left off
 
@@ -173,7 +178,7 @@ sub new {
     die "You must specify the file size" if ($params{mode} eq "new" && ! defined $params{size});
     
     my ($fh,$size,$start_point,$headers_size,$read_only) = open_file(%params);
-    
+        
     my $self = {
                 _fh_ => $fh,
                 _data_length_ => $size,
@@ -182,6 +187,7 @@ sub new {
 				_read_start_point_ => $start_point,
 				_headers_size_ => $headers_size,
 				_read_only_ => $read_only,
+				_autoflush_ => $params{autoflush},
     };
     
     bless $self, $class;
@@ -226,15 +232,15 @@ sub read {
 			$self->{_read_started_} = 1;
 		}
 	}
-	
+
 	my $to_eof =  ($self->{_write_start_point_} > $self->{_read_start_point_}) ? 
 						$self->{_write_start_point_} - $self->{_read_start_point_} :
 						($self->{_write_start_point_} - $self->{_headers_size_}) + ($self->{_file_length_} - $self->{_read_start_point_});
 							
 	$length = $to_eof > $length ? $length : $to_eof;
-	
+    
 	return undef unless $length;
-		
+
 	$self->jump($offset) if ($offset);
 	
 	my ($buffer1,$buffer2);
@@ -242,14 +248,18 @@ sub read {
 	my $bytes = CORE::read($self->{_fh_},$buffer1,$length);
 	$self->{_read_start_point_} += $bytes;
 	CORE::seek($self->{_fh_},$self->{_read_start_point_},0);
-	
+    	
 	if ($bytes < $length) {
+        $length -= $bytes;
+        if ($self->{_write_start_point_} - $self->{_headers_size_} < $length) {
+            $length = $self->{_write_start_point_} - $self->{_headers_size_};
+        }
 		CORE::seek($self->{_fh_},$self->{_headers_size_},0);
-		$bytes = CORE::read($self->{_fh_},$buffer2,$length - $bytes);
+		$bytes = CORE::read($self->{_fh_},$buffer2,$length);
 		$self->{_read_start_point_} = $self->{_headers_size_} + $bytes;
 		CORE::seek($self->{_fh_},$self->{_read_start_point_},0);
-	} 
-	
+	}
+
 	return $buffer2 ? $buffer1 . $buffer2 : $buffer1;
 }
 
@@ -282,6 +292,9 @@ sub write {
 	
 	die "File is read only!" if $self->{_read_only_};
 	
+    select($self->{_fh_});
+	local $|=1 if $self->{_autoflush_};
+    
 	$self->jump($offset) if $offset;
 	
 	$self->{_write_start_point_} = $self->{_read_start_point_};
@@ -357,6 +370,30 @@ sub eof {
 	return 1 if ($self->{_write_start_point_} == $self->{_read_start_point_} && defined $self->{_read_started_} );
 
 	return 0;
+}
+
+
+=head2 autoflush 
+
+Turns on/off the autoflush feature
+
+Usage :
+	my $autoflush = $rrfile->autoflush();
+	
+	or 
+	
+	$rrfile->autoflush(1); #enables autoflush
+	$rrfile->autoflush(0); #disables autoflush
+	
+=cut
+sub autoflush {
+	my $self = shift;
+	
+	if ( scalar(@_) ) {
+		$self->{_autoflush_} = $_[0];
+	}
+	
+	return $self->{_autoflush_};
 }
 
 

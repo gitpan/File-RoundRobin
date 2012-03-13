@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use Test::More tests => 15;
-use Data::Dumper;
 
 use_ok("File::RoundRobin");
 
@@ -63,7 +62,7 @@ use_ok("File::RoundRobin");
 
 { # create a new file , write something and read it back
     
-    my $rrfile = File::RoundRobin->new(path => 'test.txt',size => '1k');
+    my $rrfile = File::RoundRobin->new(path => 'test.txt',size => '1k', autoflush => 1);
     
     isa_ok($rrfile,'File::RoundRobin');
     
